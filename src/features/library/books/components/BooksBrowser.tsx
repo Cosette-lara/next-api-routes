@@ -221,7 +221,7 @@ export function BooksBrowser({ initialAuthors = [] }: Props) {
             {/* Tabla / lista */}
             <div className="border rounded overflow-hidden">
                 <table className="w-full text-sm">
-                    <thead className="bg-gray-50">
+                    <thead className="bg-gray-500">
                         <tr>
                             <th className="text-left px-3 py-2">Título</th>
                             <th className="text-left px-3 py-2">Autor</th>
