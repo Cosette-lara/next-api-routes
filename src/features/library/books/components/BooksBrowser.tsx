@@ -1,14 +1,40 @@
 // src/features/library/books/components/BooksBrowser.tsx
 'use client'
+
 import { useEffect, useMemo, useState } from 'react'
 
-const useDebounced = (value: string, delay = 400) => {
-    const [v, setV] = useState(value)
-    useEffect(() => { const t = setTimeout(() => setV(value), delay); return () => clearTimeout(t) }, [value, delay])
-    return v
+type AuthorOption = { id: string; name: string }
+
+type Book = {
+    id: string
+    title: string
+    description: string | null
+    isbn?: string | null
+    publishedYear?: number | null
+    genre?: string | null
+    pages?: number | null
+    author: { id: string; name: string }
+    createdAt?: string
 }
 
-export function BooksBrowser() {
+type SearchResponse = {
+    data: Book[]
+    pagination: {
+        page: number
+        limit: number
+        total: number
+        totalPages: number
+        hasNext: boolean
+        hasPrev: boolean
+    }
+}
+
+type Props = {
+    initialAuthors?: AuthorOption[]
+}
+
+export function BooksBrowser({ initialAuthors = [] }: Props) {
+    // ---- filtros / estado UI ----
     const [search, setSearch] = useState('')
     const [genre, setGenre] = useState('')
     const [authorName, setAuthorName] = useState('')
@@ -16,186 +42,239 @@ export function BooksBrowser() {
     const [order, setOrder] = useState<'asc' | 'desc'>('desc')
     const [page, setPage] = useState(1)
     const [limit, setLimit] = useState(10)
-    const [data, setData] = useState<any[]>([])
-    const [pagination, setPagination] = useState<any>(null)
+
+    // ---- autores (dropdown) ----
+    const [authors, setAuthors] = useState<AuthorOption[]>(Array.isArray(initialAuthors) ? initialAuthors : [])
+
+    // Fallback (opcional): si no vino nada del server, intenta fetch al API
+    useEffect(() => {
+        if (initialAuthors.length > 0) return
+            ; (async () => {
+                try {
+                    const r = await fetch('/api/authors', { cache: 'no-store' })
+                    const j = await r.json()
+                    const arr: AuthorOption[] = Array.isArray(j)
+                        ? j.map((a: any) => ({ id: a.id, name: a.name }))
+                        : Array.isArray(j?.data)
+                            ? j.data.map((a: any) => ({ id: a.id, name: a.name }))
+                            : []
+                    setAuthors(arr)
+                } catch {
+                    setAuthors([])
+                }
+            })()
+    }, [initialAuthors])
+
+    // Asegura que siempre sea array
+    const authorOptions = useMemo<AuthorOption[]>(
+        () => (Array.isArray(authors) ? authors : []),
+        [authors]
+    )
+
+    // ---- resultados búsqueda ----
+    const [rows, setRows] = useState<Book[]>([])
+    const [total, setTotal] = useState(0)
+    const [totalPages, setTotalPages] = useState(1)
     const [loading, setLoading] = useState(false)
-    const [authors, setAuthors] = useState<any[]>([])
-    const [genres, setGenres] = useState<string[]>([])
+    const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-    const dSearch = useDebounced(search)
-    const qs = useMemo(() => {
-        const p = new URLSearchParams()
-        if (dSearch) p.set('search', dSearch)
-        if (genre) p.set('genre', genre)
-        if (authorName) p.set('authorName', authorName)
-        p.set('page', String(page))
-        p.set('limit', String(limit))
-        p.set('sortBy', sortBy)
-        p.set('order', order)
-        return p.toString()
-    }, [dSearch, genre, authorName, page, limit, sortBy, order])
+    // Fetch a /api/books/search cuando cambian filtros
+    useEffect(() => {
+        let cancelled = false
+            ; (async () => {
+                setLoading(true)
+                setErrorMsg(null)
+                try {
+                    const params = new URLSearchParams()
+                    if (search.trim()) params.set('search', search.trim())
+                    if (genre.trim()) params.set('genre', genre.trim())
+                    if (authorName.trim()) params.set('authorName', authorName.trim())
+                    params.set('page', String(page))
+                    params.set('limit', String(limit))
+                    params.set('sortBy', sortBy)
+                    params.set('order', order)
 
-    async function load() {
-        setLoading(true)
-        const res = await fetch(`/api/books/search?${qs}`)
-        const json = await res.json()
-        setData(json.data ?? [])
-        setPagination(json.pagination ?? null)
-        setLoading(false)
+                    const res = await fetch(`/api/books/search?${params.toString()}`, { cache: 'no-store' })
+                    const data: SearchResponse | { error: string; detail?: string } = await res.json()
+
+                    if (!res.ok || !('data' in data) || !Array.isArray(data.data)) {
+                        const detail = (data as any)?.detail || (data as any)?.error || 'Error desconocido'
+                        throw new Error(detail)
+                    }
+
+                    if (!cancelled) {
+                        setRows(data.data)
+                        setTotal(data.pagination.total)
+                        setTotalPages(data.pagination.totalPages)
+                    }
+                } catch (e: any) {
+                    if (!cancelled) {
+                        setRows([])
+                        setTotal(0)
+                        setTotalPages(1)
+                        setErrorMsg(e?.message ?? 'Error al buscar libros')
+                    }
+                } finally {
+                    if (!cancelled) setLoading(false)
+                }
+            })()
+        return () => {
+            cancelled = true
+        }
+    }, [search, genre, authorName, page, limit, sortBy, order])
+
+    // Para cambiar limit resetea page
+    const changeLimit = (n: number) => {
+        setPage(1)
+        setLimit(n)
     }
-
-    async function loadAux() {
-        const aRes = await fetch('/api/authors')
-        const a = await aRes.json()
-        setAuthors(a)
-
-        const gRes = await fetch('/api/books/search?limit=50&page=1&sortBy=createdAt&order=desc')
-        const gj = await gRes.json()
-        const uniq = Array.from(new Set((gj?.data ?? []).map((x: any) => x.genre).filter(Boolean))).sort()
-        setGenres(uniq as string[])
-    }
-
-    useEffect(() => { load() }, [qs])
-    useEffect(() => { loadAux() }, [])
-
-    function onDelete(id: string) {
-        if (!confirm('¿Eliminar libro?')) return
-        fetch(`/api/books/${id}`, { method: 'DELETE' }).then(load)
-    }
-
-    function onEdit(b: any) {
-        const title = prompt('Título', b.title) ?? b.title
-        fetch(`/api/books/${b.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title })
-        }).then(load)
-    }
-
-    const hasActiveFilters = !!(dSearch || genre || authorName)
 
     return (
-        <div className="space-y-5">
-            {/* Toolbar */}
-            <div className="rounded-2xl border bg-white/60 p-4 md:p-5">
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                    <div className="relative">
-                        <input
-                            className="w-full border rounded-xl px-3 py-2 pl-9 outline-none focus:ring-2 focus:ring-gray-200"
-                            placeholder="Buscar por título…"
-                            value={search}
-                            onChange={e => { setPage(1); setSearch(e.target.value) }}
-                            aria-label="Buscar por título"
-                        />
-                        <span className="absolute left-3 top-2.5 text-gray-400">🔎</span>
+        <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+            {/* Filtros */}
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+                <div className="md:col-span-2">
+                    <label className="block text-sm mb-1">Búsqueda (título)</label>
+                    <input
+                        className="w-full border rounded px-3 py-2"
+                        placeholder="Ej. amor"
+                        value={search}
+                        onChange={(e) => { setPage(1); setSearch(e.target.value) }}
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-sm mb-1">Género</label>
+                    <input
+                        className="w-full border rounded px-3 py-2"
+                        placeholder="Ej. Novela"
+                        value={genre}
+                        onChange={(e) => { setPage(1); setGenre(e.target.value) }}
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-sm mb-1">Autor</label>
+                    <select
+                        className="w-full border rounded px-3 py-2"
+                        value={authorName}
+                        onChange={(e) => { setPage(1); setAuthorName(e.target.value) }}
+                    >
+                        <option value="">Todos los autores</option>
+                        {authorOptions.length > 0
+                            ? authorOptions.map((a) => (
+                                <option key={a.id} value={a.name}>
+                                    {a.name}
+                                </option>
+                            ))
+                            : <option disabled>(sin autores)</option>
+                        }
+                    </select>
+                </div>
+
+                <div className="flex gap-2">
+                    <div className="flex-1">
+                        <label className="block text-sm mb-1">Ordenar por</label>
+                        <select
+                            className="w-full border rounded px-3 py-2"
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value as any)}
+                        >
+                            <option value="createdAt">Fecha creación</option>
+                            <option value="title">Título</option>
+                            <option value="publishedYear">Año publicación</option>
+                        </select>
                     </div>
 
-                    <select className="border rounded-xl px-3 py-2 focus:ring-2 focus:ring-gray-200"
-                        value={genre} onChange={e => { setPage(1); setGenre(e.target.value) }}>
-                        <option value="">Todos los géneros</option>
-                        {genres.map(g => <option key={g} value={g}>{g}</option>)}
-                    </select>
-
-                    <select className="border rounded-xl px-3 py-2 focus:ring-2 focus:ring-gray-200"
-                        value={authorName} onChange={e => { setPage(1); setAuthorName(e.target.value) }}>
-                        <option value="">Todos los autores</option>
-                        {authors.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-                    </select>
-
-                    <div className="flex gap-2">
-                        <select className="border rounded-xl px-3 py-2 flex-1 focus:ring-2 focus:ring-gray-200"
-                            value={sortBy} onChange={e => setSortBy(e.target.value as any)}>
-                            <option value="createdAt">Fecha de creación</option>
-                            <option value="title">Título</option>
-                            <option value="publishedYear">Año de publicación</option>
-                        </select>
-                        <select className="border rounded-xl px-3 py-2 focus:ring-2 focus:ring-gray-200"
-                            value={order} onChange={e => setOrder(e.target.value as any)}>
+                    <div className="w-28">
+                        <label className="block text-sm mb-1">Orden</label>
+                        <select
+                            className="w-full border rounded px-3 py-2"
+                            value={order}
+                            onChange={(e) => setOrder(e.target.value as any)}
+                        >
                             <option value="desc">Desc</option>
                             <option value="asc">Asc</option>
                         </select>
                     </div>
                 </div>
-
-                {/* Filtros activos */}
-                {hasActiveFilters && (
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                        {dSearch && <span className="inline-flex items-center rounded-full border px-2 py-1">Título: “{dSearch}”</span>}
-                        {genre && <span className="inline-flex items-center rounded-full border px-2 py-1">Género: {genre}</span>}
-                        {authorName && <span className="inline-flex items-center rounded-full border px-2 py-1">Autor: {authorName}</span>}
-                        <button
-                            className="ml-auto text-gray-600 hover:underline"
-                            onClick={() => { setSearch(''); setGenre(''); setAuthorName(''); setPage(1) }}
-                        >
-                            Limpiar filtros
-                        </button>
-                    </div>
-                )}
             </div>
 
-            {/* Header resultados */}
-            <div className="flex items-center gap-3 text-sm">
-                <span className="opacity-70">Resultados: {pagination?.total ?? 0}</span>
-                <div className="ml-auto flex items-center gap-2">
-                    <label className="opacity-70">por página</label>
-                    <select className="border rounded-xl px-2 py-1"
-                        value={limit} onChange={e => { setPage(1); setLimit(parseInt(e.target.value, 10)) }}>
-                        {[10, 20, 30, 40, 50].map(n => <option key={n} value={n}>{n}</option>)}
+            {/* Barra de total + limit */}
+            <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                    {loading ? 'Buscando…' : `Resultados: ${total}`}
+                    {errorMsg && <span className="text-red-600 ml-2">({errorMsg})</span>}
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="text-sm">Por página:</span>
+                    <select
+                        className="border rounded px-2 py-1"
+                        value={limit}
+                        onChange={(e) => changeLimit(Number(e.target.value))}
+                    >
+                        {[5, 10, 20, 30, 50].map(n => <option key={n} value={n}>{n}</option>)}
                     </select>
                 </div>
             </div>
 
-            {/* Lista */}
-            {loading ? (
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {Array.from({ length: 6 }).map((_, i) => (
-                        <div key={i} className="border rounded-2xl p-4 animate-pulse bg-white/50">
-                            <div className="h-4 w-1/2 bg-gray-200 rounded mb-3" />
-                            <div className="h-3 w-1/3 bg-gray-200 rounded mb-2" />
-                            <div className="h-3 w-1/4 bg-gray-200 rounded" />
-                        </div>
-                    ))}
-                </div>
-            ) : (
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {data.map((b: any) => (
-                        <div key={b.id} className="border rounded-2xl p-4 bg-white/60 hover:bg-gray-50 transition">
-                            <div className="font-semibold">{b.title}</div>
-                            <div className="mt-1 text-sm text-gray-600">
-                                <span className="inline-flex items-center rounded-full border px-2 py-0.5 mr-2 text-xs">
-                                    {b.genre ?? '—'}
-                                </span>
-                                {b.publishedYear ?? 's/f'} • {b.author?.name}
-                            </div>
-                            <div className="mt-3 flex gap-2">
-                                <button className="px-2 py-1 rounded-xl border text-sm hover:bg-gray-50" onClick={() => onEdit(b)}>
-                                    Editar
-                                </button>
-                                <button className="px-2 py-1 rounded-xl border text-sm hover:bg-gray-50" onClick={() => onDelete(b.id)}>
-                                    Eliminar
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                    {data.length === 0 && (
-                        <div className="col-span-full text-sm text-gray-500">No se encontraron resultados.</div>
-                    )}
-                </div>
-            )}
+            {/* Tabla / lista */}
+            <div className="border rounded overflow-hidden">
+                <table className="w-full text-sm">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="text-left px-3 py-2">Título</th>
+                            <th className="text-left px-3 py-2">Autor</th>
+                            <th className="text-left px-3 py-2">Género</th>
+                            <th className="text-left px-3 py-2">Año</th>
+                            <th className="text-left px-3 py-2">Páginas</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr>
+                                <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
+                                    Cargando…
+                                </td>
+                            </tr>
+                        ) : rows.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
+                                    Sin resultados
+                                </td>
+                            </tr>
+                        ) : (
+                            rows.map((b) => (
+                                <tr key={b.id} className="border-t">
+                                    <td className="px-3 py-2">{b.title}</td>
+                                    <td className="px-3 py-2">{b.author?.name ?? '—'}</td>
+                                    <td className="px-3 py-2">{b.genre ?? '—'}</td>
+                                    <td className="px-3 py-2">{b.publishedYear ?? '—'}</td>
+                                    <td className="px-3 py-2">{b.pages ?? '—'}</td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
 
             {/* Paginación */}
-            <div className="flex items-center gap-2 justify-center">
-                <button className="px-3 py-1.5 rounded-xl border hover:bg-gray-50"
-                    disabled={!pagination?.hasPrev}
-                    onClick={() => setPage(p => Math.max(1, p - 1))}>
+            <div className="flex items-center justify-between">
+                <button
+                    disabled={page <= 1 || loading}
+                    className="border rounded px-3 py-1 disabled:opacity-50"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
                     ← Anterior
                 </button>
-                <span className="text-sm opacity-70">
-                    Página {pagination?.page ?? 1} / {pagination?.totalPages ?? 1}
-                </span>
-                <button className="px-3 py-1.5 rounded-xl border hover:bg-gray-50"
-                    disabled={!pagination?.hasNext}
-                    onClick={() => setPage(p => p + 1)}>
+                <div className="text-sm">
+                    Página {page} de {totalPages}
+                </div>
+                <button
+                    disabled={page >= totalPages || loading}
+                    className="border rounded px-3 py-1 disabled:opacity-50"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                >
                     Siguiente →
                 </button>
             </div>
