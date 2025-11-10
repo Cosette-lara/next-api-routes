@@ -1,6 +1,6 @@
-// src/app/(library)/books/page.tsx
 import { prisma } from '@/lib/prisma'
 import { BooksBrowser } from '@/features/library/books/components/BooksBrowser'
+// export const runtime = 'nodejs' // opcional
 
 export default async function BooksPage() {
     let authors: { id: string; name: string }[] = []
@@ -10,7 +10,7 @@ export default async function BooksPage() {
             orderBy: { name: 'asc' },
         })
     } catch (e) {
-        console.error('[BooksPage] DB error:', e) // Renderiza igual con dropdown vacío
+        console.error('[BooksPage] DB error:', e)
     }
     return <BooksBrowser initialAuthors={authors} />
 }
