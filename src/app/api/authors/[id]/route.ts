@@ -1,11 +1,13 @@
+// src/app/api/authors/[id]/route.ts
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import type { Prisma } from '@prisma/client' // si usas output custom, cámbialo a '@/generated/prisma'
 
 type Ctx = { params: Promise<{ id: string }> }
 const norm = (s?: string) => decodeURIComponent(s ?? '').trim()
 
 function parseBirthYear(input: unknown): number | null | undefined {
-    if (input === undefined) return undefined            // no actualizar
+    if (input === undefined) return undefined           // no actualizar
     if (input === null || String(input).trim() === '') return null
     const n = parseInt(String(input), 10)
     return Number.isNaN(n) ? null : n
@@ -22,53 +24,41 @@ export async function GET(_req: Request, ctx: Ctx) {
                 _count: { select: { books: true } },
             },
         })
-        if (!author) {
-            return NextResponse.json({ error: 'Autor no encontrado' }, { status: 404 })
-        }
+        if (!author) return NextResponse.json({ error: 'Autor no encontrado' }, { status: 404 })
         return NextResponse.json(author)
     } catch {
         return NextResponse.json({ error: 'Error al obtener autor' }, { status: 500 })
     }
 }
 
-// PUT – Actualizar (parcial) autor
+// PUT – Actualizar autor (parcial)
 export async function PUT(req: Request, ctx: Ctx) {
     try {
         const { id } = await ctx.params
         const body = await req.json()
         const { name, email, bio, nationality, birthYear } = body ?? {}
 
-        // Validación de email si viene y no es null
+        // Validar email si viene (y no es null)
         if (email !== undefined && email !== null) {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
             if (!emailRegex.test(String(email))) {
                 return NextResponse.json({ error: 'Email inválido' }, { status: 400 })
             }
         }
+        // name/email NO pueden ser null (son NOT NULL)
+        if (name === null) return NextResponse.json({ error: 'name no puede ser null' }, { status: 400 })
+        if (email === null) return NextResponse.json({ error: 'email no puede ser null' }, { status: 400 })
 
-        const data: {
-            name?: string
-            email?: string
-            bio?: string | null
-            nationality?: string | null
-            birthYear?: number | null
-        } = {}
+        // Construimos 'data' tipado a Prisma.AuthorUpdateInput
+        const data: Prisma.AuthorUpdateInput = {}
 
-        if (name !== undefined) {
-            if (name === null) return NextResponse.json({ error: 'name no puede ser null' }, { status: 400 })
-            data.name = String(name)
-        }
-
-        if (email !== undefined) {
-            if (email === null) return NextResponse.json({ error: 'email no puede ser null' }, { status: 400 })
-            data.email = String(email)
-        }
-
+        if (name !== undefined) data.name = String(name) // string, NO null
+        if (email !== undefined) data.email = String(email) // string, NO null
         if (bio !== undefined) data.bio = bio === null ? null : String(bio)
         if (nationality !== undefined) data.nationality = nationality === null ? null : String(nationality)
 
         const by = parseBirthYear(birthYear)
-        if (by !== undefined) data.birthYear = by
+        if (by !== undefined) data.birthYear = by // number | null
 
         const author = await prisma.author.update({
             where: { id: norm(id) },
