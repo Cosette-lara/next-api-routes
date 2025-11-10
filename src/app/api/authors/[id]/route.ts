@@ -1,13 +1,13 @@
-// src/app/api/authors/[id]/route.ts
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import type { Prisma } from '@prisma/client' // si usas output custom, cámbialo a '@/generated/prisma'
+// Si usas el client por defecto:
+import type { Prisma } from '@prisma/client'
 
 type Ctx = { params: Promise<{ id: string }> }
 const norm = (s?: string) => decodeURIComponent(s ?? '').trim()
 
 function parseBirthYear(input: unknown): number | null | undefined {
-    if (input === undefined) return undefined           // no actualizar
+    if (input === undefined) return undefined      // no actualizar
     if (input === null || String(input).trim() === '') return null
     const n = parseInt(String(input), 10)
     return Number.isNaN(n) ? null : n
@@ -38,27 +38,34 @@ export async function PUT(req: Request, ctx: Ctx) {
         const body = await req.json()
         const { name, email, bio, nationality, birthYear } = body ?? {}
 
-        // Validar email si viene (y no es null)
+        // Validaciones mínimas
+        if (name === null) return NextResponse.json({ error: 'name no puede ser null' }, { status: 400 })
+        if (email === null) return NextResponse.json({ error: 'email no puede ser null' }, { status: 400 })
         if (email !== undefined && email !== null) {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
             if (!emailRegex.test(String(email))) {
                 return NextResponse.json({ error: 'Email inválido' }, { status: 400 })
             }
         }
-        // name/email NO pueden ser null (son NOT NULL)
-        if (name === null) return NextResponse.json({ error: 'name no puede ser null' }, { status: 400 })
-        if (email === null) return NextResponse.json({ error: 'email no puede ser null' }, { status: 400 })
 
-        // Construimos 'data' tipado a Prisma.AuthorUpdateInput
+        // Construcción segura con { set: ... } para satisfacer AuthorUpdateInput
         const data: Prisma.AuthorUpdateInput = {}
 
-        if (name !== undefined) data.name = String(name) // string, NO null
-        if (email !== undefined) data.email = String(email) // string, NO null
-        if (bio !== undefined) data.bio = bio === null ? null : String(bio)
-        if (nationality !== undefined) data.nationality = nationality === null ? null : String(nationality)
-
+        if (name !== undefined) {
+        }
+        if (email !== undefined) {
+            data.email = { set: String(email) }
+        }
+        if (bio !== undefined) {
+            data.bio = { set: bio === null ? null : String(bio) }
+        }
+        if (nationality !== undefined) {
+            data.nationality = { set: nationality === null ? null : String(nationality) }
+        }
         const by = parseBirthYear(birthYear)
-        if (by !== undefined) data.birthYear = by // number | null
+        if (by !== undefined) {
+            data.birthYear = { set: by }
+        }
 
         const author = await prisma.author.update({
             where: { id: norm(id) },
@@ -91,3 +98,4 @@ export async function DELETE(_req: Request, ctx: Ctx) {
         return NextResponse.json({ error: 'Error al eliminar autor' }, { status: 500 })
     }
 }
+
